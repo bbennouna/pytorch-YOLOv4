@@ -16,6 +16,28 @@ class Mish(torch.nn.Module):
         return x
 
 
+class Swish(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, i):
+        result = i * F.sigmoid(i)
+        ctx.save_for_backward(i)
+        return result
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        i = ctx.saved_variables[0]
+        sigmoid_i = F.sigmoid(i)
+        return grad_output * (sigmoid_i * (1 + i * (1 - sigmoid_i)))
+
+
+swish = Swish.apply
+
+
+class Swish_module(nn.Module):
+    def forward(self, x):
+        return swish(x)
+
+
 class MaxPoolDark(nn.Module):
     def __init__(self, size=2, stride=1):
         super(MaxPoolDark, self).__init__()
@@ -56,10 +78,11 @@ class Upsample_expand(nn.Module):
 
     def forward(self, x):
         assert (x.data.dim() == 4)
-        
+
         x = x.view(x.size(0), x.size(1), x.size(2), 1, x.size(3), 1).\
             expand(x.size(0), x.size(1), x.size(2), self.stride, x.size(3), self.stride).contiguous().\
-            view(x.size(0), x.size(1), x.size(2) * self.stride, x.size(3) * self.stride)
+            view(x.size(0), x.size(1), x.size(2) *
+                 self.stride, x.size(3) * self.stride)
 
         return x
 
@@ -72,7 +95,8 @@ class Upsample_interpolate(nn.Module):
     def forward(self, x):
         assert (x.data.dim() == 4)
 
-        out = F.interpolate(x, size=(x.size(2) * self.stride, x.size(3) * self.stride), mode='nearest')
+        out = F.interpolate(x, size=(x.size(2) * self.stride,
+                                     x.size(3) * self.stride), mode='nearest')
         return out
 
 
@@ -162,7 +186,8 @@ class Darknet(nn.Module):
                 outputs[ind] = x
             elif block['type'] == 'route':
                 layers = block['layers'].split(',')
-                layers = [int(i) if int(i) > 0 else int(i) + ind for i in layers]
+                layers = [int(i) if int(i) > 0 else int(
+                    i) + ind for i in layers]
                 if len(layers) == 1:
                     if 'groups' not in block.keys() or int(block['groups']) == 1:
                         x = outputs[layers[0]]
@@ -171,7 +196,8 @@ class Darknet(nn.Module):
                         groups = int(block['groups'])
                         group_id = int(block['group_id'])
                         _, b, _, _ = outputs[layers[0]].shape
-                        x = outputs[layers[0]][:, b // groups * group_id:b // groups * (group_id + 1)]
+                        x = outputs[layers[0]][:, b // groups *
+                                               group_id:b // groups * (group_id + 1)]
                         outputs[ind] = x
                 elif len(layers) == 2:
                     x1 = outputs[layers[0]]
@@ -253,17 +279,23 @@ class Darknet(nn.Module):
                 if batch_normalize:
                     model.add_module('conv{0}'.format(conv_id),
                                      nn.Conv2d(prev_filters, filters, kernel_size, stride, pad, bias=False))
-                    model.add_module('bn{0}'.format(conv_id), nn.BatchNorm2d(filters))
+                    model.add_module('bn{0}'.format(
+                        conv_id), nn.BatchNorm2d(filters))
                     # model.add_module('bn{0}'.format(conv_id), BN2d(filters))
                 else:
                     model.add_module('conv{0}'.format(conv_id),
                                      nn.Conv2d(prev_filters, filters, kernel_size, stride, pad))
                 if activation == 'leaky':
-                    model.add_module('leaky{0}'.format(conv_id), nn.LeakyReLU(0.1, inplace=True))
+                    model.add_module('leaky{0}'.format(
+                        conv_id), nn.LeakyReLU(0.1, inplace=True))
                 elif activation == 'relu':
-                    model.add_module('relu{0}'.format(conv_id), nn.ReLU(inplace=True))
+                    model.add_module('relu{0}'.format(
+                        conv_id), nn.ReLU(inplace=True))
                 elif activation == 'mish':
                     model.add_module('mish{0}'.format(conv_id), Mish())
+                elif activation == 'swish':
+                    model.add_module('swish{0}'.format(
+                        conv_id), Swish_module())
                 else:
                     print("convalution havn't activate {}".format(activation))
 
@@ -278,11 +310,13 @@ class Darknet(nn.Module):
                 if stride == 1 and pool_size % 2:
                     # You can use Maxpooldark instead, here is convenient to convert onnx.
                     # Example: [maxpool] size=3 stride=1
-                    model = nn.MaxPool2d(kernel_size=pool_size, stride=stride, padding=pool_size // 2)
+                    model = nn.MaxPool2d(
+                        kernel_size=pool_size, stride=stride, padding=pool_size // 2)
                 elif stride == pool_size:
                     # You can use Maxpooldark instead, here is convenient to convert onnx.
                     # Example: [maxpool] size=2 stride=2
-                    model = nn.MaxPool2d(kernel_size=pool_size, stride=stride, padding=0)
+                    model = nn.MaxPool2d(
+                        kernel_size=pool_size, stride=stride, padding=0)
                 else:
                     model = MaxPoolDark(pool_size, stride)
                 out_filters.append(prev_filters)
@@ -327,22 +361,26 @@ class Darknet(nn.Module):
             elif block['type'] == 'route':
                 layers = block['layers'].split(',')
                 ind = len(models)
-                layers = [int(i) if int(i) > 0 else int(i) + ind for i in layers]
+                layers = [int(i) if int(i) > 0 else int(
+                    i) + ind for i in layers]
                 if len(layers) == 1:
                     if 'groups' not in block.keys() or int(block['groups']) == 1:
                         prev_filters = out_filters[layers[0]]
                         prev_stride = out_strides[layers[0]]
                     else:
-                        prev_filters = out_filters[layers[0]] // int(block['groups'])
-                        prev_stride = out_strides[layers[0]] // int(block['groups'])
+                        prev_filters = out_filters[layers[0]
+                                                   ] // int(block['groups'])
+                        prev_stride = out_strides[layers[0]
+                                                  ] // int(block['groups'])
                 elif len(layers) == 2:
                     assert (layers[0] == ind - 1 or layers[1] == ind - 1)
-                    prev_filters = out_filters[layers[0]] + out_filters[layers[1]]
+                    prev_filters = out_filters[layers[0]
+                                               ] + out_filters[layers[1]]
                     prev_stride = out_strides[layers[0]]
                 elif len(layers) == 4:
                     assert (layers[0] == ind - 1)
                     prev_filters = out_filters[layers[0]] + out_filters[layers[1]] + out_filters[layers[2]] + \
-                                   out_filters[layers[3]]
+                        out_filters[layers[3]]
                     prev_stride = out_strides[layers[0]]
                 else:
                     print("route error!!!")
@@ -396,7 +434,8 @@ class Darknet(nn.Module):
                 yolo_layer.num_classes = int(block['classes'])
                 self.num_classes = yolo_layer.num_classes
                 yolo_layer.num_anchors = int(block['num'])
-                yolo_layer.anchor_step = len(yolo_layer.anchors) // yolo_layer.num_anchors
+                yolo_layer.anchor_step = len(
+                    yolo_layer.anchors) // yolo_layer.num_anchors
                 yolo_layer.stride = prev_stride
                 yolo_layer.scale_x_y = float(block['scale_x_y'])
                 # yolo_layer.object_scale = float(block['object_scale'])
